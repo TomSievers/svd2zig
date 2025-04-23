@@ -22,6 +22,21 @@ pub fn printWString(wstr: []WChar) void {
     }
 }
 
+pub fn strlen(wstr: []WChar) usize {
+    return for (wstr, 0..) |wchar, i| {
+        if (wchar == 0) break i;
+    } else wstr.len;
+}
+
+pub fn eql(a: []WChar, b: []WChar) bool {
+    const len = strlen(a);
+    if (len != strlen(b)) return false;
+    for (0..len) |i| {
+        if (a[i] != b[i]) return false;
+    }
+    return true;
+}
+
 pub const UtfReader = struct {
     pub const Type = enum {
         UTF8,

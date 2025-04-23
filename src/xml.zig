@@ -42,7 +42,10 @@ pub const XmlNode = struct {
     const AttributesList = std.ArrayList(XmlAttribute);
     name: []utf.WChar,
     attributes: AttributesList,
-    children: std.ArrayList(XmlNode),
+    content: ?[]utf.WChar,
+    children: ?*XmlNode,
+    next: ?*XmlNode,
+    parent: ?*XmlNode,
     allocator: std.mem.Allocator,
     node_type: XmlNodeType,
     closed: bool,
@@ -51,7 +54,10 @@ pub const XmlNode = struct {
         return XmlNode{
             .name = name,
             .attributes = AttributesList.init(alloc),
-            .children = std.ArrayList(XmlNode).init(alloc),
+            .content = null,
+            .children = null,
+            .next = null,
+            .parent = null,
             .allocator = alloc,
             .node_type = XmlNodeType.Element,
             .closed = closed,
@@ -62,7 +68,10 @@ pub const XmlNode = struct {
         return XmlNode{
             .name = name,
             .attributes = AttributesList.init(alloc),
-            .children = std.ArrayList(XmlNode).init(alloc),
+            .content = null,
+            .children = null,
+            .next = null,
+            .parent = null,
             .allocator = alloc,
             .node_type = XmlNodeType.ProcessingInstruction,
             .closed = true,
@@ -76,30 +85,65 @@ pub const XmlNode = struct {
         return XmlNode{
             .name = name,
             .attributes = AttributesList.init(alloc),
-            .children = std.ArrayList(XmlNode).init(alloc),
+            .content = null,
+            .children = null,
+            .next = null,
+            .parent = null,
             .allocator = alloc,
             .node_type = XmlNodeType.Comment,
             .closed = true,
         };
     }
 
-    pub fn debug(self: *const XmlNode) void {
-        std.debug.print("Node Name: ", .{});
+    pub fn debug(self: *const XmlNode, depth: u8) void {
+        const indent = self.allocator.alloc(u8, depth + 1) catch unreachable;
+        for (0..depth) |i| {
+            indent[i] = '\t';
+        }
+        indent[depth] = 0; // Null-terminate the string
+        defer self.allocator.free(indent);
+        std.debug.print("{s}", .{indent});
         utf.printWString(self.name);
-        std.debug.print("\n", .{});
-        std.debug.print("Node Type: {}\n", .{self.node_type});
-        std.debug.print("Closed: {}\n", .{self.closed});
+        if (self.content) |content| {
+            std.debug.print(" = ", .{});
+            utf.printWString(content);
+        }
+        std.debug.print(" (", .{});
 
-        for (self.attributes.items) |entry| {
-            std.debug.print("Attribute: ", .{});
+        for (self.attributes.items, 0..) |entry, i| {
             utf.printWString(entry.name);
             std.debug.print(" = ", .{});
             utf.printWString(entry.value);
-            std.debug.print("\n", .{});
+            if (i < self.attributes.items.len - 1) {
+                std.debug.print(", ", .{});
+            }
+        }
+
+        std.debug.print(")\n", .{});
+
+        var node = self.children;
+        while (node) |child| {
+            child.debug(depth + 1);
+            node = child.next;
         }
     }
 
-    pub fn deinit(self: XmlNode) void {
+    pub fn add_child(self: *XmlNode, child: *XmlNode) void {
+        // Add the child to the end of the list of children
+        if (self.children) |c| {
+            var node = c;
+            // Traverse to the end of the list
+            while (node.next) |n| {
+                node = n;
+            }
+            node.next = child;
+        } else {
+            // If there are no children, set the first child
+            self.children = child;
+        }
+    }
+
+    pub fn deinit(self: *XmlNode) void {
         for (self.attributes.items) |attr| {
             attr.deinit();
         }
@@ -107,11 +151,21 @@ pub const XmlNode = struct {
         self.attributes.deinit();
         self.allocator.free(self.name);
 
-        for (self.children.items) |child| {
-            child.deinit();
+        if (self.content) |content| {
+            self.allocator.free(content);
         }
 
-        self.children.deinit();
+        var node = self.children;
+
+        while (node) |child| {
+            child.deinit();
+            node = child.next;
+            self.allocator.destroy(child);
+        }
+
+        if (self.parent == null) {
+            self.allocator.destroy(self);
+        }
     }
 };
 
@@ -175,7 +229,7 @@ pub const Xml = struct {
             if (!isWhitespace(c)) {
                 break i;
             }
-        } else 0;
+        } else element.len;
     }
 
     fn parseAttribute(self: *Self, element: []utf.WChar) !?struct { XmlAttribute, []utf.WChar } {
@@ -200,8 +254,6 @@ pub const Xml = struct {
         std.mem.copyForwards(utf.WChar, name, result_element[0..name_length]);
         name[name_length] = 0; // Null-terminate the string
         errdefer self.alloc.free(name);
-
-        utf.printWStringLine(name);
 
         result_element = result_element[name_length..];
 
@@ -275,17 +327,24 @@ pub const Xml = struct {
         return false;
     }
 
-    fn parseNode(self: *Self) !?XmlNode {
-        var node: ?XmlNode = null;
+    fn parseNode(self: *Self, parent: ?*XmlNode) !?*XmlNode {
 
         // Skip until the start of some XML content
-        try self.reader.skipUntil('<');
+
+        if (parent) |p| {
+            var content = try self.reader.readUntilAlloc(self.alloc, '<', 1024);
+            content = content[0 .. content.len - 1]; // Remove the last character
+            const whites = whiteSpaceCount(content);
+            if (whites < content.len) {
+                p.content = content;
+            } else {
+                self.alloc.free(content);
+            }
+        } else {
+            try self.reader.skipUntil('<');
+        }
 
         const char = try self.reader.read();
-
-        var temp = [_]utf.WChar{ char, 0 };
-
-        utf.printWStringLine(&temp);
 
         if (isNameStartChar(char)) {
             // Element
@@ -302,15 +361,18 @@ pub const Xml = struct {
 
             // Allocate memory for the name and copy it
             const name = try self.alloc.alloc(utf.WChar, name_length + 1);
+            errdefer self.alloc.free(name);
+
             std.mem.copyForwards(utf.WChar, name, element[0..name_length]);
             name[name_length] = 0; // Null-terminate the string
 
-            std.debug.print("Element: ", .{});
-            utf.printWStringLine(name);
+            var node = try self.alloc.create(XmlNode);
+            errdefer {
+                node.deinit();
+            }
+            node.* = XmlNode.element(name, self_closing, self.alloc);
 
-            // Create a new node with the name
-            var new_node = XmlNode.element(name, self_closing, self.alloc);
-            errdefer new_node.deinit();
+            node.parent = parent;
 
             var attribute = element[name_length..];
 
@@ -318,11 +380,15 @@ pub const Xml = struct {
                 // Parse the attributes
                 while (try self.parseAttribute(attribute)) |attr| {
                     const new_attr, attribute = attr;
-                    try new_node.attributes.append(new_attr);
+                    try node.attributes.append(new_attr);
                 }
             }
 
-            return new_node;
+            if (parent) |p| {
+                p.add_child(node);
+            }
+
+            return node;
         } else if (char == '?') {
             // Processing instruction
             const instruction = try self.reader.readUntilAlloc(self.alloc, '>', 1024);
@@ -331,31 +397,38 @@ pub const Xml = struct {
             const name_length = try nameLength(instruction);
 
             const name = try self.alloc.alloc(utf.WChar, name_length + 1);
+            errdefer self.alloc.free(name);
+
             std.mem.copyForwards(utf.WChar, name, instruction[0..name_length]);
             name[name_length] = 0; // Null-terminate the string
 
-            std.debug.print("Processing instruction: ", .{});
-            utf.printWStringLine(name);
-
-            var new_node = XmlNode.processing_instruction(name, self.alloc);
-            errdefer new_node.deinit();
+            var node = try self.alloc.create(XmlNode);
+            errdefer {
+                node.deinit();
+            }
+            node.* = XmlNode.processing_instruction(name, self.alloc);
 
             var attribute = instruction[name_length..];
 
             while (try self.parseAttribute(attribute)) |attr| {
                 const new_attr, attribute = attr;
-                try new_node.attributes.append(new_attr);
+                try node.attributes.append(new_attr);
             }
 
-            return new_node;
+            return node;
         } else if (char == '!') {
-            node = XmlNode.comment(self.alloc);
             if (try self.reader.read() == '-') {
                 // Continue reading until we find the closing '-->'
                 while (!try self.readCommentPartial()) {}
             } else {
                 try self.reader.skipUntil('>');
             }
+
+            var node = try self.alloc.create(XmlNode);
+            errdefer {
+                node.deinit();
+            }
+            node.* = XmlNode.comment(self.alloc);
 
             return node;
         } else if (char == '/') {
@@ -371,10 +444,24 @@ pub const Xml = struct {
 
             const name = closing_tag[0..name_length];
 
-            std.debug.print("Closing tag: ", .{});
-            utf.printWStringLine(name);
-
-            return null;
+            if (parent) |p| {
+                // Check if the closing tag matches the parent node
+                if (utf.eql(name, p.name)) {
+                    // Valid closing tag
+                    p.closed = true;
+                    return p;
+                } else {
+                    std.debug.print("Invalid closing tag: ", .{});
+                    utf.printWStringLine(name);
+                    utf.printWStringLine(p.name);
+                    return XmlError.InvaildClosingTag;
+                }
+            } else {
+                // No parent node, so this is an invalid closing tag
+                std.debug.print("Invalid closing tag (no parent): ", .{});
+                utf.printWStringLine(name);
+                return XmlError.MissingClosingTag;
+            }
         } else {
             return XmlError.InvalidCharacter;
         }
@@ -382,14 +469,31 @@ pub const Xml = struct {
         return null;
     }
 
-    pub fn parse(self: *Self) !?XmlNode {
-        const node: ?XmlNode = undefined;
+    pub fn parse(self: *Self) !?*XmlNode {
+        var root: ?*XmlNode = null;
+        var node: ?*XmlNode = null;
 
-        while (try self.parseNode()) |new_node| {
-            //new_node.debug();
-            defer new_node.deinit();
+        while (try self.parseNode(node)) |new_node| {
+            if (new_node.node_type == XmlNodeType.Element) {
+                if (root == null) {
+                    root = new_node;
+                }
+
+                if (new_node.closed) {
+                    node = new_node.parent;
+                } else {
+                    node = new_node;
+                }
+
+                // We tried to move up but there is no parent, end of root node.
+                if (node == null) {
+                    break;
+                }
+            } else {
+                new_node.deinit();
+            }
         }
 
-        return node;
+        return root;
     }
 };
