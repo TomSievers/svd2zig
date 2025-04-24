@@ -22,7 +22,8 @@
 				"ziglang.vscode-zig",
 				"ianic.zig-language-extras",
 				"lorenzopirro.zig-snippets",
-				"vadimcn.vscode-lldb"
+				"vadimcn.vscode-lldb",
+				"mhutchie.git-graph"
 			]
 		}
 	},

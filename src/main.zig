@@ -3,34 +3,53 @@
 //! is to delete this file and start with root.zig instead.
 
 const std = @import("std");
-const lib = @import("svd2zig_lib");
 const utf = @import("utf.zig");
 const xml = @import("xml.zig");
+const xml2 = @cImport({
+    @cInclude("libxml/parser.h");
+    @cInclude("libxml/tree.h");
+    @cInclude("libxml/xmlmemory.h");
+    @cInclude("libxml/xmlstring.h");
+    @cInclude("libxml/xmlversion.h");
+});
 
 pub fn main() !void {
-    const file_dir = std.fs.cwd();
-    var file = file_dir.openFile("ARM_Sample.svd", std.fs.File.OpenFlags{}) catch |err| {
-        std.debug.print("Error opening file: {}\n", .{err});
-        return err;
-    };
-    defer file.close(); // Ensure the file is closed when done
+    const doc = xml2.xmlParseFile("ARM_Sample.svd");
+    defer xml2.xmlFreeDoc(doc);
 
-    const reader = file.reader().any();
+    var node = xml2.xmlDocGetRootElement(doc);
 
-    const alloc = std.heap.page_allocator;
+    node = node.*.children;
 
-    var root = xml.Xml.init(reader, alloc);
-
-    const node = root.parse() catch |err| {
-        std.debug.print("Error parsing XML: {}\n", .{err});
-        return err;
-    };
-
-    defer if (node) |n| n.deinit();
-
-    if (node) |n| {
-        n.debug(0);
-    } else {
-        std.debug.print("No node found\n", .{});
+    while (node) |n| {
+        const name = n.*.name;
+        std.debug.print("Node name: {s}\n", .{name});
+        node = xml2.xmlNextElementSibling(n);
     }
+
+    // const file_dir = std.fs.cwd();
+    // var file = file_dir.openFile("ARM_Sample.svd", std.fs.File.OpenFlags{}) catch |err| {
+    //     std.debug.print("Error opening file: {}\n", .{err});
+    //     return err;
+    // };
+    // defer file.close(); // Ensure the file is closed when done
+
+    // const reader = file.reader().any();
+
+    // const alloc = std.heap.page_allocator;
+
+    // var root = xml.Xml.init(reader, alloc);
+
+    // const node = root.parse() catch |err| {
+    //     std.debug.print("Error parsing XML: {}\n", .{err});
+    //     return err;
+    // };
+
+    // defer if (node) |n| n.deinit();
+
+    // if (node) |n| {
+    //     n.debug(0);
+    // } else {
+    //     std.debug.print("No node found\n", .{});
+    // }
 }
