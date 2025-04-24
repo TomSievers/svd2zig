@@ -30,12 +30,12 @@
 	"mounts": [
 		{
 			"source": "${localWorkspaceFolderBasename}-zig_cache",
-			"target": "/workspaces/zig2svd/.zig-cache",
+			"target": "/workspaces/svd2zig/.zig-cache",
 			"type": "volume"
 		},
 		{
 			"source": "${localWorkspaceFolderBasename}-zig_out",
-			"target": "/workspaces/zig2svd/zig-out",
+			"target": "/workspaces/svd2zig/zig-out",
 			"type": "volume"
 		}
 	]

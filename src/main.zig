@@ -3,7 +3,7 @@
 //! is to delete this file and start with root.zig instead.
 
 const std = @import("std");
-const lib = @import("zig2svd_lib");
+const lib = @import("svd2zig_lib");
 const utf = @import("utf.zig");
 const xml = @import("xml.zig");
 
